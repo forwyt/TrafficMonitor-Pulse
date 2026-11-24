@@ -4,6 +4,9 @@
 #include "TrafficMonitor.h"
 #include <powerbase.h>
 #include <sysinfoapi.h>
+#include <algorithm>
+#include <cmath>
+#include <cwchar>
 
 
 ///////////////////////////////////////////////////////////////////////////////////////
@@ -84,4 +87,45 @@ int CCPUUsage::GetCpuUsageByGetSystemTimes()
     m_preuserTime = userTime;
 
     return cpu_usage;
+}
+
+CCPUUsage::LogicalCpuQuery::LogicalCpuQuery()
+    : CPdhQuery(L"\\Processor Information(*)\\% Processor Time")
+{
+}
+
+std::vector<int> CCPUUsage::LogicalCpuQuery::Sample()
+{
+    std::vector<CounterValueItem> counters;
+    if (!QueryValues(counters))
+        return {};
+
+    // Processor Information instances are named "group,index", including on machines
+    // with more than one processor group. Aggregate instances have no numeric index.
+    std::map<std::pair<unsigned, unsigned>, int> ordered_usage;
+    for (const auto& counter : counters)
+    {
+        unsigned group{}, index{};
+        if (swscanf_s(counter.name.c_str(), L"%u,%u", &group, &index) != 2)
+            continue;
+
+        int usage = -1;
+        if ((counter.status == PDH_CSTATUS_VALID_DATA || counter.status == PDH_CSTATUS_NEW_DATA)
+            && std::isfinite(counter.value))
+        {
+            usage = static_cast<int>(std::lround(std::clamp(counter.value, 0.0, 100.0)));
+        }
+        ordered_usage[{ group, index }] = usage;
+    }
+
+    std::vector<int> usage;
+    usage.reserve(ordered_usage.size());
+    for (const auto& entry : ordered_usage)
+        usage.push_back(entry.second);
+    return usage;
+}
+
+std::vector<int> CCPUUsage::GetLogicalCpuUsage()
+{
+    return m_logical_cpu_query.Sample();
 }

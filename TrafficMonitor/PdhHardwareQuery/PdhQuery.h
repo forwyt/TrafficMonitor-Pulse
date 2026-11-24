@@ -15,6 +15,7 @@ protected:
     {
         std::wstring name;
         double value{};
+        DWORD status{};
     };
     bool QueryValues(std::vector<CounterValueItem>& values);
 

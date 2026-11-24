@@ -1,5 +1,24 @@
 **简体中文 | [English](./README_en-us.md)**
 
+# TrafficMonitor Pulse
+
+Pulse 是 [TrafficMonitor](https://github.com/zhongyang219/TrafficMonitor) 的 Windows 桌面悬浮窗改版。
+
+- 上下行网速自动切换 KB/s、MB/s 和 GB/s。
+- CPU 和内存有进度条，展开面板可以查看各逻辑处理器的负载。
+- 每个带盘符的本地固定盘和已就绪的可移动盘各显示一行容量和占用进度。
+- 温度版显示 CPU 和 GPU 温度。缺少有效传感器读数时显示 `—`。
+
+从 [Releases](https://github.com/forwyt/TrafficMonitor-Pulse/releases/latest) 下载 Windows x64 便携 ZIP。完整解压后运行 `TrafficMonitor.exe`。温度版会请求管理员权限。
+
+使用 Visual Studio 2022 Developer Command Prompt 构建温度版，需要 v143 C++ 工具链、MFC 和 C++/CLI 支持。
+
+```powershell
+msbuild TrafficMonitor.sln /t:TrafficMonitor /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /m
+```
+
+以下是上游 TrafficMonitor 的说明。
+
 [![Badge](https://img.shields.io/badge/link-996.icu-%23FF4D5B.svg?style=flat-square)](https://996.icu/#/en_US)
 [![LICENSE](https://img.shields.io/badge/license-Anti%20996-blue.svg?style=flat-square)](https://github.com/996icu/996.ICU/blob/master/LICENSE)
 [![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/zhongyang219/TrafficMonitor/main.yml?branch=master&label=Release%20CI&logo=github&style=flat-square)](https://github.com/zhongyang219/TrafficMonitor/actions?query=workflow:"Release+CI")

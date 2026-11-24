@@ -943,7 +943,11 @@ void CTrafficMonitorDlg::LoadBackGroundImage()
     else
         img_tmp.Load((theApp.m_skin_path + CSkinManager::Instance().GetSkinName(m_skin_selected) + BACKGROUND_MASK_S).c_str());
     CRgn wnd_rgn;
-    if (!img_tmp.IsNull())
+    if (m_skin.IsDashboard())
+    {
+        wnd_rgn.CreateRoundRectRgn(0, 0, image_size.cx, image_size.cy, theApp.DPI(20), theApp.DPI(20));
+    }
+    else if (!img_tmp.IsNull())
     {
         CDrawCommon::BitmapStretch(&img_tmp, &img_mask, image_size);        //拉伸掩码图片
         CBitmap bitmap;
@@ -960,8 +964,8 @@ void CTrafficMonitorDlg::LoadBackGroundImage()
     empty_rgn.CreateRectRgnIndirect(CRect{});   //创建一个空的CRgn对象
     if (wnd_rgn.EqualRgn(&empty_rgn))
         wnd_rgn.SetRectRgn(CRect(CPoint(0, 0), image_size));    //如果获取到的窗口区域为空，则使用窗口大小作为窗口区域
-    SetWindowRgn(wnd_rgn, TRUE);        //设置窗口区域
-    wnd_rgn.DeleteObject();
+    if (SetWindowRgn(wnd_rgn, TRUE))    //成功后窗口拥有该区域
+        wnd_rgn.Detach();
     empty_rgn.DeleteObject();
 }
 
@@ -1455,12 +1459,20 @@ void CTrafficMonitorDlg::DoMonitorAcquisition()
     }
 
     //获取内存利用率
-    MEMORYSTATUSEX statex;
+    MEMORYSTATUSEX statex{};
     statex.dwLength = sizeof(statex);
-    GlobalMemoryStatusEx(&statex);
-    theApp.m_memory_usage = statex.dwMemoryLoad;
-    theApp.m_used_memory = static_cast<int>((statex.ullTotalPhys - statex.ullAvailPhys) / 1024);
-    theApp.m_total_memory = static_cast<int>(statex.ullTotalPhys / 1024);
+    if (GlobalMemoryStatusEx(&statex))
+    {
+        theApp.m_memory_usage = statex.dwMemoryLoad;
+        theApp.m_used_memory = (statex.ullTotalPhys - statex.ullAvailPhys) / 1024;
+        theApp.m_total_memory = statex.ullTotalPhys / 1024;
+    }
+    else
+    {
+        theApp.m_memory_usage = -1;
+        theApp.m_used_memory = 0;
+        theApp.m_total_memory = 0;
+    }
 
 #ifndef WITHOUT_TEMPERATURE
     //获取温度
@@ -1577,7 +1589,35 @@ void CTrafficMonitorDlg::DoMonitorAcquisition()
     m_monitor_time_cnt++;
 
     //发送监控信息更新消息
-    SendMessage(WM_MONITOR_INFO_UPDATED);
+    CSkinFile::DashboardSample dashboard_sample;
+    dashboard_sample.logical_cpu_usage = m_cpu_usage_helper.GetLogicalCpuUsage();
+    const DWORD drives = GetLogicalDrives();
+    for (unsigned index = 0; index < 26; ++index)
+    {
+        if ((drives & (1u << index)) == 0)
+            continue;
+        const auto drive_letter = static_cast<wchar_t>(L'A' + index);
+        wchar_t root[] = { drive_letter, L':', L'\\', L'\0' };
+        const auto type = GetDriveType(root);
+        if (type != DRIVE_FIXED && type != DRIVE_REMOVABLE)
+            continue;
+
+        ULARGE_INTEGER total{}, available{};
+        if (GetDiskFreeSpaceEx(root, &available, &total, nullptr) && available.QuadPart <= total.QuadPart)
+        {
+            dashboard_sample.storage_volumes.push_back({ drive_letter, total.QuadPart - available.QuadPart, total.QuadPart });
+        }
+        else if (type == DRIVE_FIXED)
+        {
+            dashboard_sample.storage_volumes.push_back({ drive_letter });
+        }
+    }
+
+    dashboard_sample.cpu_temperature = theApp.m_cpu_temperature;
+    dashboard_sample.gpu_temperature = theApp.m_gpu_temperature;
+
+    // SendMessage is synchronous: the UI copies the sample before it leaves scope.
+    SendMessage(WM_MONITOR_INFO_UPDATED, 0, reinterpret_cast<LPARAM>(&dashboard_sample));
 }
 
 UINT CTrafficMonitorDlg::MonitorThreadCallback(LPVOID dwUser)
@@ -2485,7 +2525,7 @@ void CTrafficMonitorDlg::OnShowCpuMemory()
     if (theApp.m_cfg_data.m_show_more_info)
     {
         rect.right = rect.left + m_skin.GetLayoutInfo().layout_l.width;
-        rect.bottom = rect.top + m_skin.GetLayoutInfo().layout_l.width;
+        rect.bottom = rect.top + m_skin.GetLayoutInfo().layout_l.height;
         MoveWindow(rect);
         CheckWindowPos();
     }
@@ -2887,6 +2927,12 @@ afx_msg LRESULT CTrafficMonitorDlg::OnTaskbarWndClosed(WPARAM wParam, LPARAM lPa
 
 afx_msg LRESULT CTrafficMonitorDlg::OnMonitorInfoUpdated(WPARAM wParam, LPARAM lParam)
 {
+    if (lParam && m_skin.SetDashboardSample(*reinterpret_cast<const CSkinFile::DashboardSample*>(lParam)))
+    {
+        SetItemPosition();
+        LoadBackGroundImage();
+        CheckWindowPos();
+    }
     Invalidate(FALSE);      //刷新窗口信息
 
     //更新鼠标提示

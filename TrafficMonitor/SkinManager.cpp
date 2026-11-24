@@ -15,11 +15,10 @@ void CSkinManager::Init()
         //获取所有皮肤名称
         CCommon::GetFiles((theApp.m_skin_path + L"*").c_str(), [&](const wstring& file_name)
             {
-                if (CCommon::IsFolder(theApp.m_skin_path + file_name))
+                if (file_name != CSkinFile::DashboardName && CCommon::IsFolder(theApp.m_skin_path + file_name))
                     m_skins.push_back(file_name);
             });
-        if (m_skins.empty())
-            m_skins.push_back(L"");
+        m_skins.insert(m_skins.begin(), CSkinFile::DashboardName);
 
         //载入所有皮肤的独立设置
         CSettingsHelper ini;

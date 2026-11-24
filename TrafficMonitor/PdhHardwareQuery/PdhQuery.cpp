@@ -88,11 +88,13 @@ bool CPdhQuery::QueryValues(std::vector<CounterValueItem>& values)
                     CounterValueItem value_item;
                     value_item.name = pItems[i].szName;
                     value_item.value = pItems[i].FmtValue.doubleValue;
+                    value_item.status = pItems[i].FmtValue.CStatus;
                     values.push_back(value_item);
                 }
             }
             else
             {
+                free(pItems);
                 return false;
             }
 

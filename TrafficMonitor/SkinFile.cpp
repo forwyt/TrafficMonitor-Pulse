@@ -8,6 +8,7 @@
 #include "DrawCommonEx.h"
 #include "SkinManager.h"
 #include "DrawCommonHelper.h"
+#include <algorithm>
 
 
 CSkinFile::CSkinFile()
@@ -86,8 +87,287 @@ void CSkinFile::DrawSkinText(IDrawCommon& drawer, DrawStr draw_str, CRect rect, 
     }
 }
 
+namespace
+{
+    constexpr int DashboardWidth = 320;
+    constexpr int StorageRowHeight = 34;
+    constexpr int StorageTop = 122;
+    constexpr int CoreRowHeight = 31;
+    constexpr int PreviewVolumeCount = 3;
+    constexpr unsigned long long GiB = 1ULL << 30;
+    constexpr unsigned long long TiB = 1ULL << 40;
+
+    int DashboardHeight(bool expanded, bool two_core_rows, size_t volume_count)
+    {
+        const int storage_height = static_cast<int>((std::max)(size_t{ 1 }, volume_count)) * StorageRowHeight;
+        return 180 + storage_height + (expanded ? 8 : 0) + (expanded && two_core_rows ? CoreRowHeight : 0);
+    }
+    constexpr COLORREF Background = RGB(20, 26, 37);
+    constexpr COLORREF Divider = RGB(43, 53, 69);
+    constexpr COLORREF Text = RGB(244, 247, 252);
+    constexpr COLORREF SecondaryText = RGB(166, 181, 202);
+    constexpr COLORREF Upload = RGB(93, 224, 192);
+    constexpr COLORREF Download = RGB(119, 179, 255);
+    constexpr COLORREF Cpu = RGB(177, 154, 255);
+    constexpr COLORREF Memory = RGB(94, 208, 230);
+    constexpr COLORREF Storage = RGB(255, 191, 105);
+
+
+    CString FormatDashboardRate(unsigned long long bytes_per_second)
+    {
+        const wchar_t* units[] = { L"KB/s", L"MB/s", L"GB/s", L"TB/s", L"PB/s", L"EB/s" };
+        double rate = bytes_per_second / 1000.0;
+        size_t unit = 0;
+        while (rate >= 999.95 && unit + 1 < _countof(units))
+        {
+            rate /= 1000.0;
+            ++unit;
+        }
+
+        CString result;
+        result.Format(L"%.1f %s", rate, units[unit]);
+        return result;
+    }
+
+    CString FormatDashboardCapacity(unsigned long long bytes)
+    {
+        CString result;
+        if (bytes >= TiB)
+            result.Format(L"%.2f TiB", static_cast<double>(bytes) / TiB);
+        else if (bytes >= GiB)
+            result.Format(L"%.1f GiB", static_cast<double>(bytes) / GiB);
+        else
+            result.Format(L"%.1f MiB", static_cast<double>(bytes) / (GiB / 1024));
+        return result;
+    }
+
+    CString FormatDashboardPercent(int usage)
+    {
+        CString result(L"—");
+        if (usage >= 0)
+            result.Format(L"%d%%", std::clamp(usage, 0, 100));
+        return result;
+    }
+}
+
+void CSkinFile::LoadDashboard()
+{
+    m_skin_info = SkinInfo{};
+    m_setting_data = SkinSettingData{};
+    m_layout_info = LayoutInfo{};
+    m_layout_info.text_height = theApp.DPI(19);
+    m_layout_info.no_label = true;
+    auto& compact = m_layout_info.layout_s;
+    compact.width = theApp.DPI(DashboardWidth);
+    compact.layout_items[TDI_UP] = { theApp.DPI(14), theApp.DPI(10), theApp.DPI(136), Alignment::SIDE, true };
+    compact.layout_items[TDI_DOWN] = { theApp.DPI(170), theApp.DPI(10), theApp.DPI(136), Alignment::SIDE, true };
+    compact.layout_items[TDI_CPU] = { theApp.DPI(14), theApp.DPI(44), theApp.DPI(136), Alignment::SIDE, true };
+    compact.layout_items[TDI_MEMORY] = { theApp.DPI(170), theApp.DPI(44), theApp.DPI(136), Alignment::SIDE, true };
+    m_layout_info.layout_l = compact;
+    UpdateDashboardSize();
+
+    const int compact_height = DashboardHeight(false, false, PreviewVolumeCount);
+    const int expanded_height = DashboardHeight(true, false, PreviewVolumeCount);
+    m_preview_info = {
+        theApp.DPI(DashboardWidth + 20), theApp.DPI(compact_height + expanded_height + 30),
+        { theApp.DPI(10), theApp.DPI(compact_height + 20) },
+        { theApp.DPI(10), theApp.DPI(10) }
+    };
+
+    m_is_png = false;
+    SAFE_DELETE(m_background_png_s);
+    SAFE_DELETE(m_background_png_l);
+    m_background_s.Destroy();
+    m_background_l.Destroy();
+}
+
+void CSkinFile::UpdateDashboardSize()
+{
+    const size_t volume_count = m_dashboard_sample.storage_volumes.size();
+    const bool two_core_rows = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS) > 32;
+    m_layout_info.layout_s.height = theApp.DPI(DashboardHeight(false, false, volume_count));
+    m_layout_info.layout_l.height = theApp.DPI(DashboardHeight(true, two_core_rows, volume_count));
+}
+
+bool CSkinFile::SetDashboardSample(const DashboardSample& sample)
+{
+    const bool resize = IsDashboard() && sample.storage_volumes.size() != m_dashboard_sample.storage_volumes.size();
+    m_dashboard_sample = sample;
+    if (resize)
+        UpdateDashboardSize();
+    return resize;
+}
+
+void CSkinFile::DrawDashboard(CDC* dc, const CRect& rect, bool expanded, bool preview) const
+{
+    const auto bounds = [&](int x, int y, int width, int height) {
+        return CRect(rect.left + theApp.DPI(x), rect.top + theApp.DPI(y),
+            rect.left + theApp.DPI(x + width), rect.top + theApp.DPI(y + height));
+    };
+    const auto fill = [&](int x, int y, int width, int height, COLORREF color) {
+        dc->FillSolidRect(bounds(x, y, width, height), color);
+    };
+    const auto text = [&](int x, int y, int width, int height, const CString& value, COLORREF color,
+                          UINT align = DT_LEFT) {
+        CRect area = bounds(x, y, width, height);
+        dc->SetTextColor(color);
+        dc->DrawText(value, &area, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS | align);
+    };
+    const auto progress = [&](int x, int y, int width, int usage, COLORREF color) {
+        fill(x, y, width, 4, Divider);
+        if (usage > 0)
+            fill(x, y, (width * std::clamp(usage, 0, 100) + 99) / 100, 4, color);
+    };
+
+    CFont regular;
+    CFont emphasis;
+    LOGFONT font{};
+    font.lfHeight = -theApp.DPI(12);
+    font.lfWeight = FW_NORMAL;
+    wcscpy_s(font.lfFaceName, L"Segoe UI");
+    regular.CreateFontIndirect(&font);
+    font.lfWeight = FW_SEMIBOLD;
+    emphasis.CreateFontIndirect(&font);
+
+    const int dc_state = dc->SaveDC();
+    dc->SetBkMode(TRANSPARENT);
+    CBrush background(Background);
+    dc->SelectStockObject(NULL_PEN);
+    dc->SelectObject(&background);
+    dc->RoundRect(&rect, CPoint(theApp.DPI(20), theApp.DPI(20)));
+
+    const bool chinese = PRIMARYLANGID(theApp.m_str_table.GetLanguageInfo().language_id) == LANG_CHINESE;
+    const auto upload = preview ? 32500ULL : theApp.m_out_speed;
+    const auto download = preview ? 5571000ULL : theApp.m_in_speed;
+    const auto cpu = preview ? 36 : theApp.m_cpu_usage;
+    const auto memory = preview ? 23 : theApp.m_memory_usage;
+    const auto memory_used = preview ? 15ULL * 1024 * 1024 : theApp.m_used_memory;
+    const auto memory_total = preview ? 64ULL * 1024 * 1024 : theApp.m_total_memory;
+
+    dc->SelectObject(&regular);
+    text(14, 10, 50, 19, chinese ? L"↑ 上传" : L"↑ Up", Upload);
+    text(170, 10, 52, 19, chinese ? L"↓ 下载" : L"↓ Down", Download);
+    text(14, 44, 50, 18, L"CPU", SecondaryText);
+    text(170, 44, 62, 18, chinese ? L"内存" : L"Memory", SecondaryText);
+
+    dc->SelectObject(&emphasis);
+    text(65, 10, 85, 19, FormatDashboardRate(upload), Text, DT_RIGHT);
+    text(225, 10, 81, 19, FormatDashboardRate(download), Text, DT_RIGHT);
+    text(68, 44, 82, 18, FormatDashboardPercent(cpu), Text, DT_RIGHT);
+    text(233, 44, 73, 18, FormatDashboardPercent(memory), Text, DT_RIGHT);
+    fill(14, 36, 292, 1, Divider);
+    progress(14, 66, 136, cpu, Cpu);
+    progress(170, 66, 136, memory, Memory);
+
+    dc->SelectObject(&regular);
+    text(14, 87, 85, 18, chinese ? L"CPU 温度" : L"CPU temp", SecondaryText);
+    text(170, 87, 85, 18, chinese ? L"GPU 温度" : L"GPU temp", SecondaryText);
+    const auto temperature = [](float reading) {
+        CString result(L"—");
+        if (reading > 0 && reading < 150)
+            result.Format(L"%.0f °C", static_cast<double>(reading));
+        return result;
+    };
+    dc->SelectObject(&emphasis);
+    text(99, 87, 51, 18, temperature(preview ? 58.0f : m_dashboard_sample.cpu_temperature), Text, DT_RIGHT);
+    text(255, 87, 51, 18, temperature(preview ? 42.0f : m_dashboard_sample.gpu_temperature), Text, DT_RIGHT);
+    fill(14, 112, 292, 1, Divider);
+
+    static const std::vector<StorageVolume> preview_volumes{
+        { L'C', 148 * GiB, 477 * GiB }, { L'D', 2300 * GiB, 3726 * GiB }, { L'E', 1150 * GiB, 2794 * GiB }
+    };
+    const auto& volumes = preview ? preview_volumes : m_dashboard_sample.storage_volumes;
+    int storage_y = StorageTop;
+    for (const auto& volume : volumes)
+    {
+        const int usage = volume.total == 0 ? -1 : static_cast<int>(100.0 * volume.used / volume.total + 0.5);
+        CString label;
+        label.Format(L"%c:", volume.drive_letter);
+        CString detail(L"—");
+        if (volume.total != 0)
+        {
+            const auto used = FormatDashboardCapacity(volume.used);
+            const auto total = FormatDashboardCapacity(volume.total);
+            const auto percent = usage == 0 && volume.used > 0 ? CString(L"<1%") : FormatDashboardPercent(usage);
+            detail.Format(L"%s / %s   %s", used.GetString(), total.GetString(), percent.GetString());
+        }
+        text(14, storage_y, 62, 18, label, Storage);
+        text(78, storage_y, 228, 18, detail, Text, DT_RIGHT);
+        progress(14, storage_y + 22, 292, usage == 0 && volume.used > 0 ? 1 : usage, Storage);
+        storage_y += StorageRowHeight;
+    }
+    if (volumes.empty())
+    {
+        text(14, storage_y, 145, 18, chinese ? L"存储  —" : L"Storage  —", SecondaryText);
+        storage_y += StorageRowHeight;
+    }
+
+    dc->SelectObject(&regular);
+    const std::vector<int> sample{ 21, 56, 15, 88, 30, 52, 18, 72, 40, 24, 61, 38, 30, 25, 16, 67 };
+    const auto& cores = preview ? sample : m_dashboard_sample.logical_cpu_usage;
+    const auto capacity = expanded ? 64u : 16u;
+    const auto bar_count = (std::min)(cores.size(), static_cast<size_t>(capacity));
+
+    CString core_label(chinese ? L"逻辑核心" : L"Logical CPUs");
+    if (!cores.empty())
+    {
+        CString count;
+        const auto logical_count = static_cast<unsigned>(cores.size());
+        if (cores.size() > bar_count)
+            count.Format(chinese ? L"  %u（分组）" : L"  %u (grouped)", logical_count);
+        else
+            count.Format(L"  %u", logical_count);
+        core_label += count;
+    }
+    else
+    {
+        core_label += L"  —";
+    }
+    text(14, storage_y + 6, 145, 17, core_label, SecondaryText);
+
+    if (memory_total != 0)
+    {
+        CString memory_detail;
+        constexpr double KiBPerGiB = 1024.0 * 1024.0;
+        memory_detail.Format(L"%.1f / %.1f GiB", memory_used / KiBPerGiB, memory_total / KiBPerGiB);
+        text(170, storage_y + 6, 136, 17, memory_detail, SecondaryText, DT_RIGHT);
+    }
+
+    const size_t columns = expanded ? 32 : 16;
+    const int first_row_count = static_cast<int>((std::min)(columns, bar_count));
+    const int stride = first_row_count > 16 ? 292 / first_row_count : 18;
+    const int width = stride - (stride >= 15 ? 5 : 3);
+    const int height = expanded ? 24 : 16;
+    for (size_t bar = 0; bar < bar_count; ++bar)
+    {
+        const int x = 14 + static_cast<int>(bar % columns) * stride;
+        const int y = storage_y + 30 + static_cast<int>(bar / columns) * CoreRowHeight;
+        fill(x, y, width, height, Divider);
+
+        // Bucket busy cores by maximum so brief saturation is still visible.
+        const auto first = cores.begin() + bar * cores.size() / bar_count;
+        const auto last = cores.begin() + (bar + 1) * cores.size() / bar_count;
+        const int usage = *std::max_element(first, last);
+        if (usage < 0)
+            continue;
+        const int filled = (std::clamp(usage, 0, 100) * height + 99) / 100;
+        if (filled > 0)
+            fill(x, y + height - filled, width, filled, Cpu);
+    }
+
+    dc->RestoreDC(dc_state);
+}
+
 bool CSkinFile::Load(const wstring& skin_name)
 {
+    m_is_dashboard = skin_name == DashboardName;
+    if (m_is_dashboard)
+    {
+        m_is_error = false;
+        LoadDashboard();
+        return true;
+    }
+
     std::wstring file_path{ theApp.m_skin_path + skin_name + L"\\skin.xml" };
     if (!CCommon::FileExist(file_path.c_str()))
         file_path = theApp.m_skin_path + skin_name + L"\\skin.ini";
@@ -413,6 +693,17 @@ void CSkinFile::SetSettingData(const SkinSettingData& setting_data)
 
 void CSkinFile::DrawPreview(CDC* pDC, CRect rect)
 {
+    if (IsDashboard())
+    {
+        const auto& compact_position = m_preview_info.s_pos;
+        const auto& expanded_position = m_preview_info.l_pos;
+        DrawDashboard(pDC, CRect(CPoint(compact_position.x, compact_position.y),
+            CSize(m_layout_info.layout_s.width, theApp.DPI(DashboardHeight(false, false, PreviewVolumeCount)))), false, true);
+        DrawDashboard(pDC, CRect(CPoint(expanded_position.x, expanded_position.y),
+            CSize(m_layout_info.layout_l.width, theApp.DPI(DashboardHeight(true, false, PreviewVolumeCount)))), true, true);
+        return;
+    }
+
     CDrawCommon draw;
     draw.Create(pDC, nullptr);
     //设置字体
@@ -561,6 +852,12 @@ void CSkinFile::DrawInfo(CDC* pDC, bool show_more_info)
     Layout& layout{ show_more_info ? m_layout_info.layout_l : m_layout_info.layout_s };
 
     CRect rect(CPoint(0, 0), CSize(layout.width, layout.height));
+    if (IsDashboard())
+    {
+        CDrawDoubleBuffer buffer(pDC, rect);
+        DrawDashboard(buffer.GetMemDC(), rect, show_more_info, false);
+        return;
+    }
 
     //如果是PNG格式背景，使用UpdateLayeredWindow函数以支持透明背景，显示项目使用GDI+绘制
     if (IsPNG())

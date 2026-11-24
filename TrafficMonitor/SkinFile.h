@@ -102,6 +102,25 @@ public:
     const CImage& GetBackgroundL() const { return m_background_l; }
     const CImage& GetBackgroundS() const { return m_background_s; }
 
+    static constexpr auto DashboardName = L"Pulse";
+    bool IsDashboard() const { return m_is_dashboard; }
+    struct StorageVolume
+    {
+        wchar_t drive_letter{};
+        unsigned long long used{};
+        unsigned long long total{};
+    };
+
+    struct DashboardSample
+    {
+        std::vector<int> logical_cpu_usage;
+        std::vector<StorageVolume> storage_volumes;
+        float cpu_temperature{ -1 };
+        float gpu_temperature{ -1 };
+    };
+
+    bool SetDashboardSample(const DashboardSample& sample);
+
     bool IsPNG() const { return m_is_png; }
     void SetAlpha(int alpha);       //设置主窗口的不透明度，alpha:0~255，仅当使用png背景时有效
 
@@ -121,6 +140,10 @@ public:
     void GetSkinDisplayItems(std::set<CommonDisplayItem>& skin_all_items) const;
 
 private:
+    void LoadDashboard();
+    void UpdateDashboardSize();
+    void DrawDashboard(CDC* dc, const CRect& rect, bool expanded, bool preview) const;
+
     bool LoadFromXml(const wstring& file_path);     //从xml文件读取皮肤数据
     void LoadFromIni(const wstring& file_path);     //从ini文件读取皮肤数据（用于兼容旧版皮肤）
 
@@ -150,6 +173,8 @@ private:
     CFont m_font;
     CImage m_background_s;
     CImage m_background_l;
+    bool m_is_dashboard{};
+    DashboardSample m_dashboard_sample;
     bool m_is_png{};
     Gdiplus::Image* m_background_png_s{};
     Gdiplus::Image* m_background_png_l{};

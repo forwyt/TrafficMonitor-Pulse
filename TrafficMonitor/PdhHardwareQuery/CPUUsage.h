@@ -26,6 +26,7 @@ public:
     {}
 
     int GetCpuUsage(bool use_cpu_time);
+    std::vector<int> GetLogicalCpuUsage();
 
 private:
     int GetCpuUsageByGetSystemTimes();
@@ -37,4 +38,13 @@ private:
     FILETIME m_preuserTime{};
 
     CPdhCPUUsage m_pdh_cup_usage_query;
+
+    class LogicalCpuQuery : public CPdhQuery
+    {
+    public:
+        LogicalCpuQuery();
+        std::vector<int> Sample();
+    };
+
+    LogicalCpuQuery m_logical_cpu_query;
 };

@@ -49,8 +49,8 @@ public:
     unsigned __int64 m_out_speed{};     //上传速度
     int m_cpu_usage{ -1 };      //CPU利用率
     int m_memory_usage{ -1 };   //内存利用率
-    int m_used_memory{};    //可用物理内存（单位为KB）
-    int m_total_memory{};   //物理内存总量（单位为KB）
+    unsigned long long m_used_memory{};    //已用物理内存（单位为KB）
+    unsigned long long m_total_memory{};   //物理内存总量（单位为KB）
     float m_cpu_temperature{ -1 };  //CPU温度
     float m_cpu_freq{ -1 };  //CPU 频率
     float m_gpu_temperature{ -1 };  //显卡温度
